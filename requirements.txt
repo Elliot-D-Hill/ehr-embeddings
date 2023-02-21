@@ -8,3 +8,4 @@ jupyter
 ipywidgets
 toml
 python-box
+rich
