@@ -1,24 +1,20 @@
 from multiprocessing import cpu_count
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import TensorDataset, DataLoader
-from polars import DataFrame, Series, col, Int64, concat_str
+import polars as pl
 
 
-def make_vocabulary(corpus: Series) -> dict:
+def make_vocabulary(corpus: pl.Series) -> pl.DataFrame:
     return corpus.unique().sort().to_frame().with_row_count("code_index")
 
 
-def make_data(df: DataFrame) -> DataFrame:
+def make_data(df: pl.DataFrame) -> pl.DataFrame:
     return (
-        df.with_columns(concat_str(["icd_code", "icd_version"], sep="_"))
-        .with_columns(col("code_index").cast(Int64, strict=False))
-        .groupby(by=["subject_id", "hadm_id"])
-        .agg(col("code_index").alias("target"))
-        .with_columns(col("target").alias("context"))
-        .select(["context", "target"])
-        .explode("target")
-        .explode("context")
-        .filter(col("context") != col("target"))
+        df.with_columns(pl.concat_str(["icd_code", "icd_version"], separator="_"))
+        .groupby(["subjectkey", "encounter"])
+        .agg(pl.col("context"))
+        .with_columns(pl.col("context").arr.to_struct(fields=["context", "target"]))
+        .unnest("context")
     )
 
 

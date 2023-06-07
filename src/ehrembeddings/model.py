@@ -1,13 +1,12 @@
 from pytorch_lightning import LightningModule
-from torch import FloatTensor, LongTensor, float32
+from torch import FloatTensor, LongTensor
 from torch.nn import Linear, Embedding, Sequential, Dropout
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from pytorch_metric_learning.losses import SelfSupervisedLoss, NTXentLoss
-from pytorch_metric_learning.regularizers import LpRegularizer
 
 
-class ICD2Vec(LightningModule):
+class EHR2Vec(LightningModule):
     def __init__(
         self,
         vocab_size: int,
@@ -39,13 +38,15 @@ class ICD2Vec(LightningModule):
         self.step_frequency = step_frequency
 
     def forward(
-        self, inputs: LongTensor, outputs: LongTensor
+        self,
+        inputs: LongTensor,
+        outputs: LongTensor,
     ) -> tuple[FloatTensor, FloatTensor]:
         input_embeddings = self.model(inputs)
         output_embeddings = self.model(outputs)
         return input_embeddings, output_embeddings
 
-    def training_step(self, batch: tuple[LongTensor, LongTensor]) -> float32:
+    def training_step(self, batch: tuple[LongTensor, LongTensor]):
         inputs, outputs = batch
         input_embeddings, output_embeddings = self(inputs, outputs)
         loss = self.criterion(input_embeddings, output_embeddings)
@@ -63,7 +64,7 @@ class ICD2Vec(LightningModule):
         )
         scheduler_config = {
             "scheduler": learning_rate_scheduler,
-            "monitor": "train_loss",
+            # "monitor": "train_loss",
             "interval": "step",
             "frequency": self.step_frequency,
             "name": "scheduler",

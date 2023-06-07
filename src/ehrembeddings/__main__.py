@@ -10,7 +10,7 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch import tensor
 
-from ehrembeddings.model import ICD2Vec
+from ehrembeddings.model import EHR2Vec
 from ehrembeddings.dataset import EmbeddingsDataModule, make_data, make_vocabulary
 
 
@@ -24,7 +24,7 @@ def main():
     contexts = tensor(data["context"].to_numpy()).long()
     targets = tensor(data["target"].to_numpy()).long()
     vocab_size = vocabulary.shape[0]
-    model = ICD2Vec(
+    model = EHR2Vec(
         vocab_size=vocab_size,
         **config.model,
         **config.loss,
@@ -44,9 +44,10 @@ def main():
         config.paths.logs,
         name="embeddings",
     )
+    lr_logger = LearningRateMonitor(logging_interval="step", log_momentum=True)
     callbacks = [
         checkpoint_callback,
-        LearningRateMonitor(logging_interval="step"),
+        lr_logger,
         RichProgressBar(),
     ]
     trainer = Trainer(
@@ -55,7 +56,7 @@ def main():
         gradient_clip_val=config.training.gradient_clip,
         max_epochs=config.training.max_epochs,
         auto_lr_find=True,
-        accelerator="cpu",  # FIXME should be "auto" eventually
+        accelerator="auto",
         devices="auto",
         log_every_n_steps=config.logging.log_every_n_steps,
         track_grad_norm=2,
