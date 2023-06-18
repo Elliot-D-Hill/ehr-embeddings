@@ -1,6 +1,6 @@
 from multiprocessing import cpu_count
 from pytorch_lightning import LightningDataModule
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import TensorDataset, DataLoader, Dataset
 import polars as pl
 
 
