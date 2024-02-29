@@ -1,5 +1,6 @@
 import polars as pl
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from ehrembeddings.config import Config
@@ -31,20 +32,20 @@ def make_data(config: Config, tokenizer: AutoTokenizer):
             .alias("time"),
         )
         .sort("user", "time")
-        .select(["user", "time", "text", "label"])
+        .select(["user", "ids", "time", "text", "label"])
     )
-    text = df["text"].to_list()
-    inputs = tokenizer(text, padding=False)
-    df = (
-        df.select(pl.exclude("text"))
-        .with_columns(inputs=pl.Series(inputs["input_ids"]))
-        .explode("inputs")
-    )
-    value_counts = df["inputs"].value_counts(parallel=True)
+    texts = df.drop_in_place("text").to_list()
+    inputs = []
+    for text in tqdm(texts):
+        tokens = tokenizer(text, padding=False, truncation=False)
+        inputs.append(tokens["input_ids"])
+    df = df.with_columns(inputs=pl.Series(inputs)).explode("inputs")
+    value_counts = df["inputs"].value_counts()
     inverse_frequency = value_counts.with_columns(
         (1 / value_counts["count"]).alias("inv_freq")
     ).select(["inputs", "inv_freq"])
-    df = df.join(other=inverse_frequency, on="inputs")
+    inv_freq_map = dict(zip(inverse_frequency["inputs"], inverse_frequency["inv_freq"]))
+    df = df.with_columns(pl.col("inputs").replace(inv_freq_map).alias("inv_freq"))
     return df
 
 
@@ -58,17 +59,15 @@ def get_data(config: Config, tokenizer: AutoTokenizer):
         val, test = train_test_split(
             val_test, train_size=0.5, random_state=config.random_seed
         )
-        train = pl.concat(train)
-        val = pl.concat(val)
-        test = pl.concat(test)
-        train.write_parquet(config.filepaths.train)
-        val.write_parquet(config.filepaths.val)
-        test.write_parquet(config.filepaths.test)
+        train: pl.DataFrame = pl.concat(train)
+        val: pl.DataFrame = pl.concat(val)
+        test: pl.DataFrame = pl.concat(test)
+        if not config.fast_dev_run:
+            train.write_parquet(config.filepaths.train)
+            val.write_parquet(config.filepaths.val)
+            test.write_parquet(config.filepaths.test)
     else:
         train = pl.read_parquet(config.filepaths.train)
         val = pl.read_parquet(config.filepaths.val)
         test = pl.read_parquet(config.filepaths.test)
-    train = train.partition_by("user", maintain_order=True)
-    val = val.partition_by("user", maintain_order=True)
-    test = test.partition_by("user", maintain_order=True)
     return train, val, test

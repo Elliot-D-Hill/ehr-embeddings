@@ -4,21 +4,49 @@ from pathlib import Path
 
 class Filepaths(BaseModel):
     data: Path
-    checkpoints: Path
-    logs: Path
     train: Path
     val: Path
     test: Path
-    inverse_frequency: Path
+    pretrain_checkpoints: Path
+    finetune_checkpoints: Path
+    logs: Path
 
 
-class Model(BaseModel):
+class PretrainModel(BaseModel):
     embedding_dim: int
 
 
-class Optimizer(BaseModel):
+class FinetuneModel(BaseModel):
+    hidden_dim: int
+    output_dim: int
+    freeze: bool
+    random_embeddings: bool
+
+
+class Model(BaseModel):
+    pretrain: PretrainModel
+    finetune: FinetuneModel
+
+
+class OptimizerConfig(BaseModel):
     lr: float
     weight_decay: float
+
+
+class OptimizerShared(BaseModel):
+    momentum: float
+    nesterov: bool
+
+
+class Optimizer(BaseModel):
+    pretrain: OptimizerConfig
+    finetune: OptimizerConfig
+    shared: OptimizerShared
+
+
+class Scheduler(BaseModel):
+    patience: int
+    factor: float
 
 
 class Training(BaseModel):
@@ -27,22 +55,28 @@ class Training(BaseModel):
     gradient_clip: float
     sigma: float
     n_negatives: int
+    early_stopping_patience: int
 
 
 class Logging(BaseModel):
-    checkpoint_every_n_steps: int
+    check_val_every_n_epoch: int
+    val_check_interval: int
     log_every_n_steps: int
 
 
 class Config(BaseModel):
-    fast_dev_run: bool
     random_seed: int
-    train_size: float
+    fast_dev_run: bool
     regenerate: bool
-    # regenerate: bool
+    pretrain: bool
+    finetune: bool
+    evaluate: bool
+    profile: bool
+    train_size: float
+    monitor: str
+    mode: str
     # tune: bool
     # refit: bool
-    # evaluate: bool
     # plot: bool
     # n_trials: int
     # verbose: bool
@@ -52,4 +86,5 @@ class Config(BaseModel):
     training: Training
     logging: Logging
     optimizer: Optimizer
+    scheduler: Scheduler
     model: Model
