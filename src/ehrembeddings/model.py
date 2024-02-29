@@ -124,7 +124,7 @@ class EmbeddingModel(Module):
             self.embeddings = Embedding(
                 num_embeddings=embeddings.shape[0],
                 embedding_dim=embeddings.shape[1],
-                freeze=freeze,
+                _freeze=freeze,
             )
         else:
             self.embeddings = Embedding.from_pretrained(
