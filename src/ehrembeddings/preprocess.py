@@ -31,9 +31,13 @@ def make_data(config: Config, tokenizer: AutoTokenizer):
             .truediv(SECONDS_PER_DAY)
             .alias("time"),
         )
+        .with_columns(
+            pl.col("time").diff(n=-1, null_behavior="drop").over(pl.col("user"))
+        )
         .sort("user", "time")
         .select(["user", "ids", "time", "text", "label"])
     )
+    print(df)
     texts = df.drop_in_place("text").to_list()
     inputs = []
     for text in tqdm(texts):

@@ -1,0 +1,18 @@
+random_seed = 42
+fast_dev_run = true
+pretrain = false
+
+[model]
+vocab_size = 10_000
+sequence_length = 256
+hidden_dim = 64
+num_heads = 8
+num_layers = 2
+
+[optimizer]
+lr = 1e-5
+momentum = 0.9
+weight_decay = 1e-6
+
+[filepaths]
+dataset = "path/to/data.csv"
