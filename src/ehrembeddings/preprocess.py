@@ -78,4 +78,4 @@ def get_data(config: Config, tokenizer: AutoTokenizer):
         train = pl.read_parquet(config.filepaths.train)
         val = pl.read_parquet(config.filepaths.val)
         test = pl.read_parquet(config.filepaths.test)
-    return train, val, test
+    return train.to_pandas(), val.to_pandas(), test.to_pandas()

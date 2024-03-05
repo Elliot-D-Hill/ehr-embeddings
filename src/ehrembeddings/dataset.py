@@ -3,8 +3,9 @@ from torch import concat, eye, multinomial, randint, softmax, tensor, zeros
 from torch.utils.data import DataLoader, Dataset
 from torch.multiprocessing import cpu_count
 from torch.nn.utils.rnn import pad_sequence
-from torch.distributions import Normal, MultivariateNormal
+from torch.distributions import MultivariateNormal
 import polars as pl
+import pandas as pd
 
 
 class Word2VecDataset(Dataset):
@@ -39,12 +40,12 @@ class Word2VecDataset(Dataset):
 class PretrainDataset(Dataset):
     def __init__(
         self,
-        df: pl.DataFrame,
+        df: pd.DataFrame,
         vocab_size: int,
         sigma: float | list[float],
         n_negatives: int,
     ) -> None:
-        self.dataset = df.partition_by("user", maintain_order=True)
+        self.dataset = [instance for _, instance in df.groupby("user", sort=False)]
         self.vocab_size = vocab_size
         self.n_negatives = n_negatives
         self.sigma = eye(len(sigma)) * tensor(sigma)
@@ -53,22 +54,21 @@ class PretrainDataset(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, index):
-        df: pl.DataFrame = self.dataset[index]
+        df = self.dataset[index]
         inv_freq = tensor(df["inv_freq"].to_numpy())
         target_index = multinomial(input=inv_freq, num_samples=1, replacement=True)
-        inputs = tensor(df["inputs"]).long()
+        inputs = tensor(df["inputs"].to_numpy()).long()
         target = inputs[target_index]
-        df = df.with_columns(
-            pl.when(pl.col("ids") == df["ids"][target_index])
-            .then(1)
-            .otherwise(0)
-            .alias("same_tweet")
+        df["same_tweet"] = (df["ids"] == df["ids"].iloc[target_index.item()]).astype(
+            int
         )
         variables = tensor(
-            df.select(["time", "word_index", "user_index", "same_tweet"]).to_numpy()
+            df[["time", "word_index", "user_index", "same_tweet"]].to_numpy()
         )
         target_variables = variables[target_index]
-        normal_distribution = Normal(loc=target_variables, scale=self.sigma)
+        normal_distribution = MultivariateNormal(
+            loc=target_variables, covariance_matrix=self.sigma
+        )
         log_prob = normal_distribution.log_prob(variables)
         probs = softmax(log_prob, dim=0)
         positive_index = multinomial(input=probs, num_samples=1, replacement=True)
@@ -110,7 +110,7 @@ class PretrainDataModule(LightningDataModule):
             n_negatives=n_negatives,
         )
         self.batch_size = batch_size
-        self.num_workers = cpu_count() - 1
+        self.num_workers = 0  # cpu_count() - 1
 
     def train_dataloader(self):
         return DataLoader(
@@ -119,8 +119,8 @@ class PretrainDataModule(LightningDataModule):
             shuffle=True,
             pin_memory=True,
             num_workers=self.num_workers,
-            multiprocessing_context="fork",
-            persistent_workers=True,
+            # multiprocessing_context="fork",
+            # persistent_workers=True,
         )
 
     def val_dataloader(self):
@@ -130,8 +130,8 @@ class PretrainDataModule(LightningDataModule):
             shuffle=False,
             pin_memory=True,
             num_workers=self.num_workers,
-            multiprocessing_context="fork",
-            persistent_workers=True,
+            # multiprocessing_context="fork",
+            # persistent_workers=True,
         )
 
     def test_dataloader(self):
@@ -141,8 +141,8 @@ class PretrainDataModule(LightningDataModule):
             shuffle=False,
             pin_memory=True,
             num_workers=self.num_workers,
-            multiprocessing_context="fork",
-            persistent_workers=True,
+            # multiprocessing_context="fork",
+            # persistent_workers=True,
         )
 
 
@@ -174,7 +174,7 @@ class FinetuneDataModule(LightningDataModule):
         self.val_dataset = FinetuneDataset(df=val)
         self.test_dataset = FinetuneDataset(df=test)
         self.batch_size = batch_size
-        self.num_workers = cpu_count() - 1
+        self.num_workers = 0  # cpu_count() - 1
 
     def train_dataloader(self):
         return DataLoader(
@@ -184,7 +184,7 @@ class FinetuneDataModule(LightningDataModule):
             pin_memory=True,
             num_workers=self.num_workers,
             collate_fn=collate,
-            multiprocessing_context="fork",
+            # multiprocessing_context="fork",
             # persistent_workers=True,
         )
 
@@ -196,7 +196,7 @@ class FinetuneDataModule(LightningDataModule):
             pin_memory=True,
             num_workers=self.num_workers,
             collate_fn=collate,
-            multiprocessing_context="fork",
+            # multiprocessing_context="fork",
             # persistent_workers=True,
         )
 
@@ -208,6 +208,6 @@ class FinetuneDataModule(LightningDataModule):
             pin_memory=True,
             num_workers=self.num_workers,
             collate_fn=collate,
-            multiprocessing_context="fork",
+            # multiprocessing_context="fork",
             # persistent_workers=True,
         )

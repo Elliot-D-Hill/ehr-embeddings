@@ -56,19 +56,19 @@ def main():
     if config.evaluate:
         trainer.test(model=finetune_model, datamodule=finetune_data_module)
 
-    k = 10
-    embeddings = pretrain_model.model.target_embeddings.weight.detach().numpy()
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    print(index.is_trained)
-    index.add(embeddings)
-    text = ["happy sad angry hungry dog violence game research statistics"]
-    indices = tokenizer(text=text)["input_ids"]
-    distances, neighbors = index.search(embeddings[indices], k)
-    for i, (distance, k_neighbors) in enumerate(zip(distances, neighbors)):
-        if i not in {0, k}:
-            print(tokenizer.convert_ids_to_tokens(k_neighbors))
-            print(distances)
-            print()
+    if True:  # FIXME
+        k = 10
+        embeddings = pretrain_model.model.target_embeddings.weight.detach().numpy()
+        index = faiss.IndexFlatL2(embeddings.shape[1])
+        print(index.is_trained)
+        index.add(embeddings)
+        text = ["happy sad angry hungry dog violence game research statistics"]
+        indices = tokenizer(text=text)["input_ids"]
+        distances, neighbors = index.search(embeddings[indices], k)
+        for i, (distance, k_neighbors) in enumerate(zip(distances, neighbors)):
+            if i not in {0, k}:
+                print(tokenizer.convert_ids_to_tokens(k_neighbors))
+                print()
 
 
 if __name__ == "__main__":
