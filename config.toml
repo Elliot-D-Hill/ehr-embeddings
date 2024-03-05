@@ -44,7 +44,7 @@ max_epochs = 100
 gradient_clip = 1.0
 early_stopping_patience = 2
 # 1/4 of a day, 2 words, 10 words, 1 tweet identity 
-sigma = [0.25, 2.0, 10.0, 1.0]                 
+sigma = 0.25              
 n_negatives = 10
 
 [scheduler]
