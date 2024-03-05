@@ -39,7 +39,15 @@ def make_data(config: Config, tokenizer: AutoTokenizer):
     for text in tqdm(texts):
         tokens = tokenizer(text, padding=False, truncation=False)
         inputs.append(tokens["input_ids"])
-    df = df.with_columns(inputs=pl.Series(inputs)).explode("inputs")
+    df = (
+        df.with_columns(inputs=pl.Series(inputs))
+        .explode("inputs")
+        .with_columns(
+            pl.col("inputs").cum_count().over("user").alias("user_index"),
+            pl.col("inputs").cum_count().over("user", "ids").alias("word_index"),
+        )
+    )
+    print(df)
     value_counts = df["inputs"].value_counts()
     inverse_frequency = value_counts.with_columns(
         (1 / value_counts["count"]).alias("inv_freq")

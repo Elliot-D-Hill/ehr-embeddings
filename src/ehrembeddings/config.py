@@ -53,7 +53,7 @@ class Training(BaseModel):
     batch_size: int
     max_epochs: int
     gradient_clip: float
-    sigma: float
+    sigma: float | list[float]
     n_negatives: int
     early_stopping_patience: int
 
