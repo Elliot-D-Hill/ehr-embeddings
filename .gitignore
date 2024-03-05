@@ -130,6 +130,5 @@ dmypy.json
 
 log.ipynb
 data/
-config.toml
 .DS_Store
 .vscode
