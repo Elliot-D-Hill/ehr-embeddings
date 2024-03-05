@@ -1,10 +1,39 @@
 from pytorch_lightning import LightningDataModule
-from torch import concat, multinomial, randint, softmax, tensor
+from torch import concat, multinomial, randint, softmax, tensor, zeros
 from torch.utils.data import DataLoader, Dataset
 from torch.multiprocessing import cpu_count
 from torch.nn.utils.rnn import pad_sequence
 from torch.distributions import Normal
 import polars as pl
+
+
+class Word2VecDataset(Dataset):
+    def __init__(self, df: pl.DataFrame, window_size: int, vocab_size: int) -> None:
+        self.dataset = df.partition_by("user", maintain_order=True)
+        self.window_size = window_size
+        self.vocab_size = vocab_size
+        self.n_negatives = 10
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        df: pl.DataFrame = self.dataset[index]
+        inv_freq = tensor(df["inv_freq"].to_numpy())
+        target_index = multinomial(input=inv_freq, num_samples=1, replacement=True)
+        inputs = df["inputs"]
+        target = inputs[target_index]
+        window_start = max(target_index - self.context_size, 0)
+        window_stop = min(target_index + self.context_size + 1, df.shape[0])
+        weights = zeros(df.shape[0])
+        weights[window_start:window_stop] = 1
+        weights[target_index] = 0
+        positive_index = multinomial(weights, num_samples=1, replacement=True)
+        positive = inputs[positive_index]
+        negatives = randint(low=0, high=self.vocab_size, size=(self.n_negatives,))
+        context = concat([positive, negatives]).long()
+        labels = tensor([1] + ([0] * self.n_negatives)).float()
+        return context, target, labels
 
 
 class PretrainDataset(Dataset):
