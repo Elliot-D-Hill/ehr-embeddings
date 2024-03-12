@@ -1,11 +1,9 @@
 torch
 pytorch-lightning
-pytorch-metric-learning
 tensorboard
 polars
 numpy
 jupyter
 ipywidgets
 toml
-python-box
 rich

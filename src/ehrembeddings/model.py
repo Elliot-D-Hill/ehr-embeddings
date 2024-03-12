@@ -1,71 +1,237 @@
 from pytorch_lightning import LightningModule
-from torch import FloatTensor, LongTensor, float32
-from torch.nn import Linear, Embedding, Sequential, Dropout
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-from pytorch_metric_learning.losses import SelfSupervisedLoss, NTXentLoss
-from pytorch_metric_learning.regularizers import LpRegularizer
+from torch import LongTensor, Tensor, bmm
+from torch.nn import Module, Linear, Embedding, Sequential, BCEWithLogitsLoss, ReLU
+from torch.optim import Optimizer, SGD
+from torch.optim.lr_scheduler import LRScheduler, ReduceLROnPlateau
+from torchmetrics.functional import auroc
+
+from ehrembeddings.config import Config
+from ehrembeddings.utils import get_best_checkpoint
 
 
-class ICD2Vec(LightningModule):
+class SkipGram(Module):
+    def __init__(self, vocab_size: int, embedding_dim: int) -> None:
+        super().__init__()
+        self.target_embeddings = Embedding(
+            num_embeddings=vocab_size, embedding_dim=embedding_dim
+        )
+        self.context_embeddings = Embedding(
+            num_embeddings=vocab_size, embedding_dim=embedding_dim
+        )
+
+    def forward(self, target: LongTensor, context: LongTensor) -> Tensor:
+        target_embeddings = self.target_embeddings(target)
+        context_embeddings = self.context_embeddings(context)
+        dot_product = bmm(
+            target_embeddings, context_embeddings.transpose(1, 2)
+        ).squeeze(1)
+        return dot_product
+
+
+class PretrainModel(LightningModule):
     def __init__(
         self,
-        vocab_size: int,
-        embedding_dim: int,
-        dropout_rate: float,
-        metric_embedding_dim: int,
-        learning_rate: float,
-        weight_decay: float,
-        temperature: float,
-        initial_restart_iter: int,
-        warm_restart_factor: int,
-        step_frequency: int,
+        model: SkipGram,
+        optimizer: Optimizer,
+        scheduler: LRScheduler,
+        criterion: Module,
+        monitor: str,
     ) -> None:
         super().__init__()
-        self.embeddings = Embedding(
-            num_embeddings=vocab_size,
-            embedding_dim=embedding_dim,
-        )
-        self.linear = Linear(
-            in_features=embedding_dim, out_features=metric_embedding_dim
-        )
-        self.dropout = Dropout(p=dropout_rate)
-        self.learning_rate = learning_rate
-        self.weight_decay = weight_decay
-        self.model = Sequential(self.embeddings, self.dropout, self.linear)
-        self.criterion = SelfSupervisedLoss(NTXentLoss(temperature=temperature))
-        self.initial_restart_iter = initial_restart_iter
-        self.warm_restart_factor = warm_restart_factor
-        self.step_frequency = step_frequency
+        self.model = model
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.criterion = criterion
+        self.monitor = monitor
 
-    def forward(
-        self, inputs: LongTensor, outputs: LongTensor
-    ) -> tuple[FloatTensor, FloatTensor]:
-        input_embeddings = self.model(inputs)
-        output_embeddings = self.model(outputs)
-        return input_embeddings, output_embeddings
+    def forward(self, target: LongTensor, context: LongTensor) -> Tensor:
+        return self.model(target, context)
 
-    def training_step(self, batch: tuple[LongTensor, LongTensor]) -> float32:
-        inputs, outputs = batch
-        input_embeddings, output_embeddings = self(inputs, outputs)
-        loss = self.criterion(input_embeddings, output_embeddings)
-        self.log("train_loss", loss, prog_bar=True, logger=True)
+    def step(self, batch, step_type: str):
+        context, target, labels = batch
+        outputs = self(target, context)
+        loss = self.criterion(outputs, labels)
+        if step_type != "train":
+            predicted_positive_index = outputs.argmax(dim=1, keepdim=True)
+            auccuracy = (predicted_positive_index == 0).float().mean()
+            self.log(f"{step_type}_accuracy", auccuracy, prog_bar=True)
+        self.log(f"{step_type}_loss", loss, prog_bar=True)
         return loss
 
+    def training_step(self, batch, batch_idx: int):
+        return self.step(batch, step_type="train")
+
+    def validation_step(self, batch, batch_idx: int):
+        return self.step(batch, step_type="val")
+
+    def test_step(self, batch, batch_idx: int):
+        self.step(batch, step_type="test")
+
     def configure_optimizers(self):
-        optimizer = AdamW(
-            self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay
-        )
-        learning_rate_scheduler = CosineAnnealingWarmRestarts(
-            optimizer,
-            T_0=self.initial_restart_iter,
-            T_mult=self.warm_restart_factor,
-        )
-        scheduler_config = {
-            "scheduler": learning_rate_scheduler,
-            "monitor": "train_loss",
-            "interval": "step",
-            "frequency": self.step_frequency,
-            "name": "scheduler",
+        return {
+            "optimizer": self.optimizer,
+            "lr_scheduler": self.scheduler,
+            "monitor": self.monitor,
         }
-        return {"optimizer": optimizer, "lr_scheduler": scheduler_config}
+
+
+# TODO make_optimizer and make_scheduler should select the method and initialize it
+def make_pretrain_model(
+    config: Config, vocab_size: int, pretrain: bool
+) -> PretrainModel:
+    model = SkipGram(
+        vocab_size=vocab_size, embedding_dim=config.model.pretrain.embedding_dim
+    )
+    optimizer = SGD(
+        model.parameters(),
+        **config.optimizer.pretrain.dict(),
+        **config.optimizer.shared.dict(),
+    )
+    scheduler = ReduceLROnPlateau(optimizer, **config.scheduler.dict())
+    criterion = BCEWithLogitsLoss()
+    if pretrain:
+        return PretrainModel(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            criterion=criterion,
+            monitor=config.monitor,
+        )
+    best_checkpoint = get_best_checkpoint(
+        ckpt_folder=config.filepaths.pretrain_checkpoints, mode=config.mode
+    )
+    return PretrainModel.load_from_checkpoint(
+        checkpoint_path=best_checkpoint,
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        criterion=criterion,
+        monitor=config.monitor,
+    )
+
+
+class EmbeddingModel(Module):
+    def __init__(
+        self,
+        embeddings: Tensor,
+        hidden_dim: int,
+        output_dim: int,
+        freeze: bool,
+        random_embeddings: bool,
+    ) -> None:
+        super().__init__()
+        if random_embeddings:
+            self.embeddings = Embedding(
+                num_embeddings=embeddings.shape[0],
+                embedding_dim=embeddings.shape[1],
+                _freeze=freeze,
+            )
+        else:
+            self.embeddings = Embedding.from_pretrained(
+                embeddings, freeze=freeze, padding_idx=0
+            )
+        self.parallel_mlp = Sequential(
+            Linear(embeddings.shape[1], hidden_dim),
+            ReLU(),
+            Linear(hidden_dim, hidden_dim),
+        )
+        self.mlp = Sequential(
+            Linear(hidden_dim, hidden_dim),
+            ReLU(),
+            Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, events: LongTensor):
+        out: Tensor = self.parallel_mlp(self.embeddings(events))
+        return self.mlp(out.mean(dim=1))
+
+
+class FinetuneModel(LightningModule):
+    def __init__(
+        self,
+        model: Module,
+        optimizer: Optimizer,
+        scheduler: LRScheduler,
+        criterion: Module,
+        monitor: str,
+    ) -> None:
+        super().__init__()
+        self.model = model
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.criterion = criterion
+        self.monitor = monitor
+
+    def forward(self, events: LongTensor):
+        return self.model(events)
+
+    def step(self, batch, step_type: str):
+        features, labels = batch
+        outputs = self(features)
+        loss = self.criterion(outputs, labels)
+        self.log(
+            f"{step_type}_loss",
+            loss.item(),
+            prog_bar=True,
+            on_epoch=True,
+            on_step=False,
+        )
+        if step_type != "train":
+            auc = auroc(outputs, labels.long(), task="binary")
+            self.log(
+                f"{step_type}_auc",
+                auc.item(),
+                prog_bar=True,
+                on_epoch=True,
+                on_step=False,
+            )
+        return loss
+
+    def training_step(self, batch, batch_idx: int):
+        return self.step(batch, step_type="train")
+
+    def validation_step(self, batch, batch_idx: int):
+        return self.step(batch, step_type="val")
+
+    def test_step(self, batch, batch_idx: int):
+        self.step(batch, step_type="test")
+
+    def configure_optimizers(self):
+        return {
+            "optimizer": self.optimizer,
+            "lr_scheduler": self.scheduler,
+            "monitor": self.monitor,
+        }
+
+
+# TODO make_optimizer and make_scheduler should select the method and initialize it
+def make_finetune_model(embeddings, config: Config, finetune: bool):
+    model = EmbeddingModel(embeddings=embeddings, **config.model.finetune.dict())
+    optimizer = SGD(
+        params=model.parameters(),
+        **config.optimizer.finetune.dict(),
+        **config.optimizer.shared.dict(),
+    )
+    scheduler = ReduceLROnPlateau(
+        optimizer=optimizer, mode=config.mode, **config.scheduler.dict()
+    )
+    criterion = BCEWithLogitsLoss()
+    if finetune:
+        return FinetuneModel(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            criterion=criterion,
+            monitor=config.monitor,
+        )
+    best_checkpoint = get_best_checkpoint(
+        ckpt_folder=config.filepaths.finetune_checkpoints, mode=config.mode
+    )
+    return FinetuneModel.load_from_checkpoint(
+        checkpoint_path=best_checkpoint,
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        criterion=criterion,
+        monitor=config.monitor,
+    )

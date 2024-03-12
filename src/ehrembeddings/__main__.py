@@ -1,75 +1,73 @@
 import toml
-from box import Box
-from polars import read_csv
-from pytorch_lightning import seed_everything, Trainer
-from pytorch_lightning.callbacks import (
-    ModelCheckpoint,
-    LearningRateMonitor,
-    RichProgressBar,
-)
-from pytorch_lightning.loggers import TensorBoardLogger
-from torch import tensor
+from pytorch_lightning import seed_everything
+from transformers import AutoTokenizer
+from faiss import IndexFlatL2
 
-from ehrembeddings.model import ICD2Vec
-from ehrembeddings.dataset import EmbeddingsDataModule, make_data, make_vocabulary
+from ehrembeddings.config import Config
+from ehrembeddings.model import (
+    make_finetune_model,
+    make_pretrain_model,
+)
+from ehrembeddings.dataset import (
+    FinetuneDataModule,
+    PretrainDataModule,
+)
+from ehrembeddings.preprocess import get_data
+from ehrembeddings.trainer import make_trainer
 
 
 def main():
-    config = Box(toml.load("config.toml"))
+    config = Config(**toml.load("config.toml"))
     seed_everything(config.random_seed)
-    df = read_csv(config.paths.data)
-    vocabulary = make_vocabulary(corpus=df["icd_code"])
-    df = df.join(vocabulary, on="icd_code")
-    data = make_data(df=df)
-    contexts = tensor(data["context"].to_numpy()).long()
-    targets = tensor(data["target"].to_numpy()).long()
-    vocab_size = vocabulary.shape[0]
-    model = ICD2Vec(
-        vocab_size=vocab_size,
-        **config.model,
-        **config.loss,
-        **config.optimizer,
-        **config.lr_scheduler,
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", use_fast=True)
+    train, val, test = get_data(config=config, tokenizer=tokenizer)
+    pretrain_data_module = PretrainDataModule(
+        train=train,
+        val=val,
+        test=test,
+        vocab_size=tokenizer.vocab_size,
+        sigma=config.training.sigma,
+        n_negatives=config.training.n_negatives,
+        batch_size=config.training.batch_size,
     )
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=config.paths.checkpoints,
-        filename="{epoch}_{step}_{train_loss:.2f}",
-        save_top_k=1,
-        verbose=True,
-        monitor="train_loss",
-        mode="min",
-        every_n_train_steps=config.logging.checkpoint_every_n_steps,
+    pretrainer = make_trainer(
+        config=config, ckpt_folder=config.filepaths.pretrain_checkpoints
     )
-    logger = TensorBoardLogger(
-        config.paths.logs,
-        name="embeddings",
+    pretrain_model = make_pretrain_model(
+        config=config, vocab_size=tokenizer.vocab_size, pretrain=config.pretrain
     )
-    callbacks = [
-        checkpoint_callback,
-        LearningRateMonitor(logging_interval="step"),
-        RichProgressBar(),
-    ]
-    trainer = Trainer(
-        logger=logger,
-        callbacks=callbacks,
-        gradient_clip_val=config.training.gradient_clip,
-        max_epochs=config.training.max_epochs,
-        auto_lr_find=True,
-        accelerator="cpu",  # FIXME should be "auto" eventually
-        devices="auto",
-        log_every_n_steps=config.logging.log_every_n_steps,
-        track_grad_norm=2,
-        fast_dev_run=config.fast_dev_run,
+    if config.pretrain:
+        pretrainer.fit(pretrain_model, datamodule=pretrain_data_module)
+    if config.evaluate:
+        pretrainer.test(model=pretrain_model, datamodule=pretrain_data_module)
+    trainer = make_trainer(
+        config=config, ckpt_folder=config.filepaths.finetune_checkpoints
     )
-    data_module = EmbeddingsDataModule(
-        contexts=contexts, targets=targets, batch_size=config.training.batch_size
+    finetune_data_module = FinetuneDataModule(
+        train=train, val=val, test=test, batch_size=config.training.batch_size
     )
-    trainer.tune(model, datamodule=data_module)
-    trainer.fit(
-        model,
-        datamodule=data_module,
-        # ckpt_path="",
+    finetune_model = make_finetune_model(
+        embeddings=pretrain_model.model.target_embeddings.weight,
+        config=config,
+        finetune=config.finetune,
     )
+    if config.finetune:
+        trainer.fit(model=finetune_model, datamodule=finetune_data_module)
+    if config.evaluate:
+        trainer.test(model=finetune_model, datamodule=finetune_data_module)
+    k = 10
+    embeddings = pretrain_model.model.target_embeddings.weight.detach().numpy()
+    index = IndexFlatL2(embeddings.shape[1])
+    print("KNN is train:", index.is_trained)
+    index.add(embeddings)
+    text = ["happy sad angry hungry dog violence game research statistics"]
+    indices = tokenizer(text=text)["input_ids"]
+    distances, neighbors = index.search(embeddings[indices], k)
+    for i, (distance, k_neighbors) in enumerate(zip(distances, neighbors)):
+        if i not in {0, k}:
+            print(tokenizer.convert_ids_to_tokens(k_neighbors))
+            print(distances)
+            print()
 
 
 if __name__ == "__main__":
