@@ -11,9 +11,9 @@ mode = "min"
 
 [filepaths]
 data = "data/datasets/sentiment_analysis.csv"
-train = "data/datasets/train.csv"
-val = "data/datasets/val.csv"
-test = "data/datasets/test.csv"
+train = "data/datasets/train.parquet"
+val = "data/datasets/val.parquet"
+test = "data/datasets/test.parquet"
 pretrain_checkpoints = "data/pretrain_checkpoints"
 finetune_checkpoints = "data/finetune_checkpoints"
 logs = "data/lightning_logs"
@@ -43,7 +43,6 @@ batch_size = 512
 max_epochs = 100
 gradient_clip = 1.0
 early_stopping_patience = 2
-# 1/4 of a day, 2 words, 10 words, 1 tweet identity 
 sigma = 0.25              
 n_negatives = 10
 

@@ -1,5 +1,5 @@
 from pytorch_lightning import LightningDataModule
-from torch import concat, multinomial, randint, softmax, tensor, zeros
+from torch import concat, multinomial, randint, tensor, zeros, exp
 from torch.utils.data import DataLoader, Dataset
 from torch.multiprocessing import cpu_count
 from torch.nn.utils.rnn import pad_sequence
@@ -64,7 +64,7 @@ class PretrainDataset(Dataset):
         target_time = input_times[target_index]
         normal_distribution = Normal(loc=target_time, scale=self.sigma)
         log_prob = normal_distribution.log_prob(input_times)
-        probs = softmax(log_prob, dim=0)
+        probs = exp(log_prob, dim=0)
         positive_index = multinomial(input=probs, num_samples=1, replacement=True)
         positive = inputs[positive_index]
         negatives = randint(low=0, high=self.vocab_size, size=(self.n_negatives,))
