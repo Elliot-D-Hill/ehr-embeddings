@@ -132,3 +132,7 @@ log.ipynb
 data/
 .DS_Store
 .vscode
+
+# additional from scot branch
+main.py
+vocab.ipynb
