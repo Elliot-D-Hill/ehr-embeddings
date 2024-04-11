@@ -1,4 +1,4 @@
-"""GloVe. Adapted from https://github.com/AotY/Pytorch-Glove/."""
+"""GloVe."""
 
 import torch
 import torch.nn as nn
@@ -8,6 +8,9 @@ from collections import Counter, defaultdict
 
 
 class GloVe(nn.Module):
+    """
+    Global Vector Embedding.
+    """
 
     def __init__(
         self, embed_size, vocab_size, min_occurance=1, x_max=100, alpha=0.75
