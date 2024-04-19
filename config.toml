@@ -43,8 +43,9 @@ batch_size = 512
 max_epochs = 100
 gradient_clip = 1.0
 early_stopping_patience = 2
-sigma = 0.25              
+sigma = 0.25
 n_negatives = 10
+window_size = 5
 
 [scheduler]
 patience = 1

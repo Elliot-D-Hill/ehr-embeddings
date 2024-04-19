@@ -1,7 +1,7 @@
 import toml
 from pytorch_lightning import seed_everything
 from transformers import AutoTokenizer
-from faiss import IndexFlatL2
+# from faiss import IndexFlatL2
 
 from ehrembeddings.config import Config
 from ehrembeddings.model import (
@@ -10,7 +10,7 @@ from ehrembeddings.model import (
 )
 from ehrembeddings.dataset import (
     FinetuneDataModule,
-    PretrainDataModule,
+    make_pretrain_data_module,
 )
 from ehrembeddings.preprocess import get_data
 from ehrembeddings.trainer import make_trainer
@@ -21,14 +21,8 @@ def main():
     seed_everything(config.random_seed)
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", use_fast=True)
     train, val, test = get_data(config=config, tokenizer=tokenizer)
-    pretrain_data_module = PretrainDataModule(
-        train=train,
-        val=val,
-        test=test,
-        vocab_size=tokenizer.vocab_size,
-        sigma=config.training.sigma,
-        n_negatives=config.training.n_negatives,
-        batch_size=config.training.batch_size,
+    pretrain_data_module = make_pretrain_data_module(
+        train=train, val=val, test=test, vocab_size=tokenizer.vocab_size, config=config
     )
     pretrainer = make_trainer(
         config=config, ckpt_folder=config.filepaths.pretrain_checkpoints
@@ -55,19 +49,20 @@ def main():
         trainer.fit(model=finetune_model, datamodule=finetune_data_module)
     if config.evaluate:
         trainer.test(model=finetune_model, datamodule=finetune_data_module)
-    k = 10
-    embeddings = pretrain_model.model.target_embeddings.weight.detach().numpy()
-    index = IndexFlatL2(embeddings.shape[1])
-    print("KNN is train:", index.is_trained)
-    index.add(embeddings)
-    text = ["happy sad angry hungry dog violence game research statistics"]
-    indices = tokenizer(text=text)["input_ids"]
-    distances, neighbors = index.search(embeddings[indices], k)
-    for i, (distance, k_neighbors) in enumerate(zip(distances, neighbors)):
-        if i not in {0, k}:
-            print(tokenizer.convert_ids_to_tokens(k_neighbors))
-            print(distances)
-            print()
+
+    # k = 10
+    # embeddings = pretrain_model.model.target_embeddings.weight.detach().numpy()
+    # index = IndexFlatL2(embeddings.shape[1])
+    # print("KNN is train:", index.is_trained)
+    # index.add(embeddings)
+    # text = ["happy sad angry hungry dog violence game research statistics"]
+    # indices = tokenizer(text=text)["input_ids"]
+    # distances, neighbors = index.search(embeddings[indices], k)
+    # for i, (distance, k_neighbors) in enumerate(zip(distances, neighbors)):
+    #     if i not in {0, k}:
+    #         print(tokenizer.convert_ids_to_tokens(k_neighbors))
+    #         print(distances)
+    #         print()
 
 
 if __name__ == "__main__":

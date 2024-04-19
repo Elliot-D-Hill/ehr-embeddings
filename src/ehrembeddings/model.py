@@ -1,9 +1,19 @@
 from pytorch_lightning import LightningModule
-from torch import LongTensor, Tensor, bmm
-from torch.nn import Module, Linear, Embedding, Sequential, BCEWithLogitsLoss, ReLU
+from torch import LongTensor, Tensor, bmm, concat, tensor
+from torch.nn import (
+    Module,
+    Linear,
+    Embedding,
+    EmbeddingBag,
+    Sequential,
+    BCEWithLogitsLoss,
+    ReLU,
+)
 from torch.optim import Optimizer, SGD
 from torch.optim.lr_scheduler import LRScheduler, ReduceLROnPlateau
 from torchmetrics.functional import auroc
+from torchvision.ops import MLP
+from lightly.loss import NTXentLoss
 
 from ehrembeddings.config import Config
 from ehrembeddings.utils import get_best_checkpoint
@@ -28,6 +38,55 @@ class SkipGram(Module):
         return dot_product
 
 
+class SimCLR(LightningModule):
+    def __init__(
+        self,
+        vocab_size: int,
+        embedding_dim: int,
+        hidden_dim: int,
+        n_layers: int,
+        projection_dim: int,
+        optimizer: Optimizer,
+        scheduler: LRScheduler,
+    ) -> None:
+        super().__init__()
+        self.embeddings = EmbeddingBag(
+            num_embeddings=vocab_size, embedding_dim=embedding_dim
+        )
+        self.mlp = MLP(
+            in_channels=embedding_dim,
+            hidden_channels=[hidden_dim] * n_layers,
+        )
+        self.model = Sequential(self.embeddings, self.mlp)
+        self.projection_head = MLP(
+            in_channels=hidden_dim,
+            hidden_channels=[hidden_dim, projection_dim],
+        )
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.criterion = NTXentLoss()
+
+    def forward(self, x, weights=None):
+        h = self.model(x, per_sample_weights=weights, mode="sum")
+        z = self.projection_head(h)
+        return z
+
+    def training_step(self, batch, batch_idx):
+        anchor, inputs, log_probs = batch
+        anchor_projection = self.forward(anchor)
+        context_projection = self.forward(inputs, weights=log_probs)
+        loss = self.criterion(anchor_projection, context_projection)
+        self.log("train_loss", loss)
+        return loss
+
+    def configure_optimizers(self):
+        return {
+            "optimizer": self.optimizer,
+            "lr_scheduler": self.scheduler,
+            "monitor": "train_loss",
+        }
+
+
 class PretrainModel(LightningModule):
     def __init__(
         self,
@@ -35,21 +94,21 @@ class PretrainModel(LightningModule):
         optimizer: Optimizer,
         scheduler: LRScheduler,
         criterion: Module,
-        monitor: str,
     ) -> None:
         super().__init__()
         self.model = model
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.criterion = criterion
-        self.monitor = monitor
 
     def forward(self, target: LongTensor, context: LongTensor) -> Tensor:
         return self.model(target, context)
 
     def step(self, batch, step_type: str):
-        context, target, labels = batch
-        outputs = self(target, context)
+        anchor, positive, negatives = batch
+        indices = concat([positive, negatives]).long()
+        labels = tensor([1] + ([0] * self.n_negatives)).float()
+        outputs = self(anchor, indices)
         loss = self.criterion(outputs, labels)
         if step_type != "train":
             predicted_positive_index = outputs.argmax(dim=1, keepdim=True)
@@ -71,11 +130,10 @@ class PretrainModel(LightningModule):
         return {
             "optimizer": self.optimizer,
             "lr_scheduler": self.scheduler,
-            "monitor": self.monitor,
+            "monitor": "val_loss",
         }
 
 
-# TODO make_optimizer and make_scheduler should select the method and initialize it
 def make_pretrain_model(
     config: Config, vocab_size: int, pretrain: bool
 ) -> PretrainModel:
@@ -95,7 +153,6 @@ def make_pretrain_model(
             optimizer=optimizer,
             scheduler=scheduler,
             criterion=criterion,
-            monitor=config.monitor,
         )
     best_checkpoint = get_best_checkpoint(
         ckpt_folder=config.filepaths.pretrain_checkpoints, mode=config.mode
@@ -176,15 +233,6 @@ class FinetuneModel(LightningModule):
             on_epoch=True,
             on_step=False,
         )
-        if step_type != "train":
-            auc = auroc(outputs, labels.long(), task="binary")
-            self.log(
-                f"{step_type}_auc",
-                auc.item(),
-                prog_bar=True,
-                on_epoch=True,
-                on_step=False,
-            )
         return loss
 
     def training_step(self, batch, batch_idx: int):
@@ -194,7 +242,12 @@ class FinetuneModel(LightningModule):
         return self.step(batch, step_type="val")
 
     def test_step(self, batch, batch_idx: int):
-        self.step(batch, step_type="test")
+        inputs, labels = batch
+        outputs = self(inputs)
+        loss = self.criterion(outputs, labels)
+        auc = auroc(outputs, labels.long(), task="binary")
+        metrics = {"test_loss": loss, "auroc": auc}
+        self.log_dict(metrics)
 
     def configure_optimizers(self):
         return {

@@ -55,6 +55,7 @@ class Training(BaseModel):
     gradient_clip: float
     sigma: float
     n_negatives: int
+    window_size: int
     early_stopping_patience: int
 
 
@@ -75,6 +76,7 @@ class Config(BaseModel):
     train_size: float
     monitor: str
     mode: str
+    method: str
     # tune: bool
     # refit: bool
     # plot: bool

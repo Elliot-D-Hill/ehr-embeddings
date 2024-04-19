@@ -1,14 +1,14 @@
 import polars as pl
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from transformers import PreTrainedTokenizerFast, PreTrainedTokenizer
 
 from ehrembeddings.config import Config
 
 SECONDS_PER_DAY = 24 * 60 * 60
 
 
-def make_data(config: Config, tokenizer: AutoTokenizer):
+def make_data(config: Config, tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast):
     column_names = ["label", "ids", "date", "flag", "user", "text"]
     df = (
         pl.read_csv(
@@ -18,7 +18,7 @@ def make_data(config: Config, tokenizer: AutoTokenizer):
         )
         .rename({f"column_{i+1}": name for i, name in enumerate(column_names)})
         .with_columns(
-            pl.col("text").str.strip("@(\w+)"),
+            pl.col("text").str.strip("@(\\w+)"),
             pl.col("label").replace({4: 1}),  # 0 = negative, 4 = positive
             pl.col("date")
             .str.replace("PDT ", "")
@@ -49,7 +49,7 @@ def make_data(config: Config, tokenizer: AutoTokenizer):
     return df
 
 
-def get_data(config: Config, tokenizer: AutoTokenizer):
+def get_data(config: Config, tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast):
     if config.regenerate:
         df = make_data(config=config, tokenizer=tokenizer)
         dfs = df.partition_by("user")
@@ -59,9 +59,9 @@ def get_data(config: Config, tokenizer: AutoTokenizer):
         val, test = train_test_split(
             val_test, train_size=0.5, random_state=config.random_seed
         )
-        train: pl.DataFrame = pl.concat(train)
-        val: pl.DataFrame = pl.concat(val)
-        test: pl.DataFrame = pl.concat(test)
+        train = pl.concat(train)
+        val = pl.concat(val)
+        test = pl.concat(test)
         if not config.fast_dev_run:
             train.write_parquet(config.filepaths.train)
             val.write_parquet(config.filepaths.val)
